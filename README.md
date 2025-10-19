@@ -8,6 +8,8 @@ A small and simple GO script for bulk editing MP3 [ID3][] tags
 
 ## Usage
 
+MYID3 depends on `ffmpeg` and `ffprobe`, make sure they are in your `$PATH`
+
 ```
 myid3 <path>
 ```

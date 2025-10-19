@@ -8,11 +8,12 @@ import (
 	"text/tabwriter"
 
 	"myid3/util"
-
-	"github.com/rkoesters/xdg/trash"
 )
 
-const TARGET_FORMAT = "mp3"
+const (
+	TARGET_FORMAT      = "mp3"
+	CONVERTED_DIR_NAME = "converted"
+)
 
 func printUsage() {
 	fmt.Fprint(os.Stderr, "USAGE: myid3 <path>\n")
@@ -25,8 +26,9 @@ type song struct {
 	number int
 	title  string
 
-	path     string
-	basename string
+	path          string
+	basename      string
+	convertedPath string
 }
 
 type metadata struct {
@@ -40,7 +42,7 @@ type metadata struct {
 
 	songs []song
 
-	parentdir string
+	parentDir string
 }
 
 func main() {
@@ -60,7 +62,7 @@ func main() {
 	if info.IsDir() {
 		// Album dir
 		meta.album = util.FixTitle(info.Name())
-		meta.parentdir = path
+		meta.parentDir = path
 
 		_, parentinfo, err := util.ParentDir(path)
 		if err == nil {
@@ -70,11 +72,11 @@ func main() {
 		collectSongs(&meta, path, info)
 	} else {
 		// Track file
-		parentdir, _, err := util.ParentDir(path)
+		parentDir, _, err := util.ParentDir(path)
 		if err != nil {
 			util.Fatal("Unable to get parent dir: %s", err)
 		}
-		meta.parentdir = parentdir
+		meta.parentDir = parentDir
 
 		number, title := util.SongNumberAndTitle(info.Name())
 		meta.songs = append(meta.songs, song{
@@ -94,6 +96,7 @@ func main() {
 	}
 
 	convert(&meta)
+	commit(&meta)
 
 	fmt.Println("DONE!")
 }
@@ -234,8 +237,21 @@ func pushCover(args *[]string, coverPath string) {
 }
 func convert(meta *metadata) {
 	// Create a temporary dir where all the converted files will be stored
-	targetDir := filepath.Join(meta.parentdir, "converted")
-	os.MkdirAll(targetDir, os.ModePerm)
+	convertedDir := filepath.Join(meta.parentDir, CONVERTED_DIR_NAME)
+
+	_, err := os.Stat(convertedDir)
+	if err == nil {
+		fmt.Println("Removing existing temp dir...")
+		// Remove previous temp dir if it already exists
+		os.RemoveAll(convertedDir)
+	}
+
+	err = os.MkdirAll(convertedDir, os.ModePerm)
+	if err != nil {
+		util.Fatal("Unable to create temp dir \"%s\": %s", convertedDir, err)
+	}
+
+	fmt.Println()
 
 	for idx, s := range meta.songs {
 		args := make([]string, 0, 16)
@@ -265,21 +281,46 @@ func convert(meta *metadata) {
 		pushCodec(&args, s.path)
 
 		targetBasename := util.SetExt(s.basename, TARGET_FORMAT)
-		targetFilepath := filepath.Join(targetDir, targetBasename)
+		fp := filepath.Join(convertedDir, targetBasename)
+		targetFilepath, err := filepath.Abs(fp)
+		if err != nil {
+			util.Fatal("Unable to absolute path \"%s\": %s", fp, err)
+		}
 		args = append(args, targetFilepath) // push target file
 
-		fmt.Println("Converting song %d/%d...", idx+1, len(meta.songs))
+		meta.songs[idx].convertedPath = targetFilepath
+
+		fmt.Printf("\x1b[1F\x1b[0KConverting song %d/%d \"%s\"...\n", idx+1, len(meta.songs), s.path)
 
 		if !util.RunCmd("ffmpeg", args...) {
 			util.Fatal("Song conversion failed, stop")
 		}
+	}
+}
 
-		// Trash the original song file
-		trash.Trash(s.path)
+func commit(meta *metadata) {
+	fmt.Println("Moving converted files...")
+
+	convertedDir := filepath.Join(meta.parentDir, CONVERTED_DIR_NAME)
+
+	for _, s := range meta.songs {
+		// Remove the original song file
+		err := os.Remove(s.path)
+		if err != nil {
+			util.Fatal("Unable to remove the original song file \"%s\": %s", s.path, err)
+		}
+
 		// Move the converted song file back to the albums dir
-		os.Rename(targetFilepath, s.path)
-		// Trash the temp directory (just in case)
-		trash.Trash(targetDir)
+		err = os.Rename(s.convertedPath, s.path)
+		if err != nil {
+			util.Fatal("Unable to move converted song \"%s\": %s", s.convertedPath, err)
+		}
+	}
+
+	// Remove already empty temp directory
+	err := os.Remove(convertedDir)
+	if err != nil {
+		util.Fatal("Unable to remove temp dir \"%s\": %s", convertedDir, err)
 	}
 }
 
@@ -290,7 +331,11 @@ func collectSongs(meta *metadata, path string, info os.FileInfo) {
 	}
 
 	for _, e := range entries {
-		thisPath := filepath.Join(path, e.Name())
+		fp := filepath.Join(path, e.Name())
+		thisPath, err := filepath.Abs(fp)
+		if err != nil {
+			util.Fatal("Unable to absolute song path \"%s\": %s", fp, err)
+		}
 
 		if e.IsDir() {
 			util.Warn("'%s' is a directory, skip", thisPath)

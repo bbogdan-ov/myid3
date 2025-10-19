@@ -4,6 +4,8 @@ A small and simple GO script for bulk editing MP3 [ID3][] tags
 
 [ID3]: https://en.wikipedia.org/wiki/ID3
 
+![1](./screenshots/1.png)
+
 ## Usage
 
 ```
@@ -23,6 +25,9 @@ Title.opus
 
 The name of this dir is considered as a default
 album name and parenting dir is considered as a default artist name
+
+MYID3 will also try to search for `cover.{jpg,png,webp}` file inside the album
+directory and set it as default album cover image
 
 **If you specify a single song file**
 
